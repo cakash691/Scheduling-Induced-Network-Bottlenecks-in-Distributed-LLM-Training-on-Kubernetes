@@ -1,0 +1,65 @@
+# G23_k8s_affinity.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: electra-master-svc
+spec:
+  selector:
+    role: master
+  ports:
+    - port: 29500
+      targetPort: 29500
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: electra-master
+  labels:
+    role: master
+spec:
+  containers:
+  - name: electra-container
+    image: electra-sim:v1
+    imagePullPolicy: IfNotPresent
+    command: ["python", "G23_electra_train.py"]
+    env:
+    - name: MASTER_ADDR
+      value: "electra-master-svc"
+    - name: MASTER_PORT
+      value: "29500"
+    - name: WORLD_SIZE
+      value: "2"
+    - name: RANK
+      value: "0"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: electra-worker
+  labels:
+    role: worker
+spec:
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: role
+            operator: In
+            values:
+            - master
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: electra-container
+    image: electra-sim:v1
+    imagePullPolicy: IfNotPresent
+    command: ["python", "G23_electra_train.py"]
+    env:
+    - name: MASTER_ADDR
+      value: "electra-master-svc"
+    - name: MASTER_PORT
+      value: "29500"
+    - name: WORLD_SIZE
+      value: "2"
+    - name: RANK
+      value: "1"

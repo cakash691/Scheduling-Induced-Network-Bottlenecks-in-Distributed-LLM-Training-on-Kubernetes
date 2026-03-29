@@ -1,49 +1,112 @@
 # G23_Makefile
 
-IMAGE_NAME = electra-sim:v1
+IMAGE_NAME   = electra-sim:v1
 CLUSTER_NAME = llm-cluster
+NUM_TRIALS   = 5
+RESULTS_DIR  = results
 
-.PHONY: build run-affinity run-antiaffinity plot clean
+.PHONY: build run-affinity run-antiaffinity run-affinity-trials run-antiaffinity-trials \
+        run-all-trials plot clean setup-results
 
-# 1. Builds the Docker image and loads it into the kind cluster
+# ──────────────────────────────────────────────
+# 0. Create results directory
+# ──────────────────────────────────────────────
+setup-results:
+	@mkdir -p $(RESULTS_DIR)
+
+# ──────────────────────────────────────────────
+# 1. Build Docker image and load into Kind
+# ──────────────────────────────────────────────
 build:
-	@echo " Building Docker image..."
+	@echo "══ Building Docker image..."
 	docker build -f G23_Dockerfile -t $(IMAGE_NAME) .
-	@echo " Loading image into kind cluster..."
+	@echo "══ Loading image into kind cluster..."
 	kind load docker-image $(IMAGE_NAME) --name $(CLUSTER_NAME)
-	@echo " Build and load complete!"
+	@echo "══ Build and load complete!"
 
-# 2. Runs the Same-Node experiment, fetches logs, and cleans up
-run-affinity:
-	@echo " Starting Affinity Experiment (Same Node)..."
+# ──────────────────────────────────────────────
+# 2. Single-run targets (kept for quick testing)
+# ──────────────────────────────────────────────
+run-affinity: setup-results
+	@echo "══ Starting Affinity Experiment (Same Node)..."
 	kubectl apply -f G23_k8s_affinity.yaml
-	@echo " Waiting 5 seconds for pods to initialize..."
-	sleep 5
-	@echo " Fetching Logs..."
-	kubectl logs electra-master -f
-	@echo " Cleaning up Affinity pods..."
+	@echo "══ Waiting for master pod to complete training..."
+	kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=300s
+	@echo "══ Training complete. Fetching logs..."
+	kubectl logs electra-master
+	@echo "══ Extracting CSV from logs..."
+	kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_affinity.csv
+	@echo "══ Cleaning up pods..."
 	kubectl delete -f G23_k8s_affinity.yaml
-	@echo " Affinity experiment finished!"
+	@echo "══ Affinity experiment finished! CSV saved to $(RESULTS_DIR)/G23_results_affinity.csv"
 
-# 3. Runs the Cross-Node experiment, fetches logs, and cleans up
-run-antiaffinity:
-	@echo " Starting Anti-Affinity Experiment (Different Nodes)..."
+run-antiaffinity: setup-results
+	@echo "══ Starting Anti-Affinity Experiment (Different Nodes)..."
 	kubectl apply -f G23_k8s_antiaffinity.yaml
-	@echo " Waiting 5 seconds for pods to initialize..."
-	sleep 5
-	@echo " Fetching Logs..."
-	kubectl logs electra-master -f
-	@echo " Cleaning up Anti-Affinity pods..."
+	@echo "══ Waiting for master pod to complete training..."
+	kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=300s
+	@echo "══ Training complete. Fetching logs..."
+	kubectl logs electra-master
+	@echo "══ Extracting CSV from logs..."
+	kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_antiaffinity.csv
+	@echo "══ Cleaning up pods..."
 	kubectl delete -f G23_k8s_antiaffinity.yaml
-	@echo " Anti-Affinity experiment finished!"
+	@echo "══ Anti-Affinity experiment finished! CSV saved to $(RESULTS_DIR)/G23_results_antiaffinity.csv"
 
-# 4. Generates the final plot
+# ──────────────────────────────────────────────
+# 3. Multi-trial targets (5 runs each for stats)
+# ──────────────────────────────────────────────
+run-affinity-trials: setup-results
+	@echo "══ Running $(NUM_TRIALS) Affinity trials..."
+	@for i in $$(seq 1 $(NUM_TRIALS)); do \
+		echo ""; \
+		echo "── Trial $$i/$(NUM_TRIALS) (Affinity) ──"; \
+		kubectl apply -f G23_k8s_affinity.yaml; \
+		kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=300s; \
+		kubectl logs electra-master; \
+		kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_affinity_run$$i.csv; \
+		kubectl delete -f G23_k8s_affinity.yaml; \
+		echo "── Trial $$i complete. CSV → $(RESULTS_DIR)/G23_results_affinity_run$$i.csv"; \
+		sleep 2; \
+	done
+	@echo "══ All $(NUM_TRIALS) Affinity trials finished!"
+
+run-antiaffinity-trials: setup-results
+	@echo "══ Running $(NUM_TRIALS) Anti-Affinity trials..."
+	@for i in $$(seq 1 $(NUM_TRIALS)); do \
+		echo ""; \
+		echo "── Trial $$i/$(NUM_TRIALS) (Anti-Affinity) ──"; \
+		kubectl apply -f G23_k8s_antiaffinity.yaml; \
+		kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=300s; \
+		kubectl logs electra-master; \
+		kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_antiaffinity_run$$i.csv; \
+		kubectl delete -f G23_k8s_antiaffinity.yaml; \
+		echo "── Trial $$i complete. CSV → $(RESULTS_DIR)/G23_results_antiaffinity_run$$i.csv"; \
+		sleep 2; \
+	done
+	@echo "══ All $(NUM_TRIALS) Anti-Affinity trials finished!"
+
+# Convenience: run all trials for both configs back-to-back
+run-all-trials: run-affinity-trials run-antiaffinity-trials
+	@echo ""
+	@echo "══════════════════════════════════════════"
+	@echo "  All experiments complete!"
+	@echo "  $(NUM_TRIALS) Affinity + $(NUM_TRIALS) Anti-Affinity CSVs in ./$(RESULTS_DIR)/"
+	@echo "══════════════════════════════════════════"
+
+# ──────────────────────────────────────────────
+# 4. Generate plots from collected CSVs
+# ──────────────────────────────────────────────
 plot:
-	@echo " Generating plot..."
+	@echo "══ Generating plots from $(RESULTS_DIR)/..."
 	python G23_plot.py
+	@echo "══ Plots saved!"
 
-# 5. Emergency cleanup just in case pods get stuck
+# ──────────────────────────────────────────────
+# 5. Emergency cleanup
+# ──────────────────────────────────────────────
 clean:
-	@echo " Force cleaning all project pods..."
+	@echo "══ Force cleaning all project pods..."
 	kubectl delete -f G23_k8s_affinity.yaml --ignore-not-found
 	kubectl delete -f G23_k8s_antiaffinity.yaml --ignore-not-found
+	@echo "══ Clean complete."

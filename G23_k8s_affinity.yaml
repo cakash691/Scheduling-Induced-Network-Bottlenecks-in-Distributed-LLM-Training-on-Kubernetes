@@ -1,4 +1,5 @@
 # G23_k8s_affinity.yaml
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -19,21 +20,21 @@ metadata:
 spec:
   restartPolicy: Never
   containers:
-  - name: electra-container
-    image: electra-sim:v1
-    imagePullPolicy: IfNotPresent
-    command: ["python", "G23_electra_train.py"]
-    env:
-    - name: MASTER_ADDR
-      value: "electra-master-svc"
-    - name: MASTER_PORT
-      value: "29500"
-    - name: WORLD_SIZE
-      value: "2"
-    - name: RANK
-      value: "0"
-    - name: OUTPUT_CSV
-      value: "/app/G23_results.csv"
+    - name: electra-container
+      image: electra-sim:v1
+      imagePullPolicy: IfNotPresent
+      command: ["python", "G23_electra_train.py"]
+      env:
+        - name: MASTER_ADDR
+          value: "electra-master-svc"
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "2"
+        - name: RANK
+          value: "0"
+        - name: OUTPUT_CSV
+          value: "/app/G23_results.csv"
 ---
 apiVersion: v1
 kind: Pod
@@ -46,24 +47,24 @@ spec:
   affinity:
     podAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
-      - labelSelector:
-          matchExpressions:
-          - key: role
-            operator: In
-            values:
-            - master
-        topologyKey: kubernetes.io/hostname
+        - labelSelector:
+            matchExpressions:
+              - key: role
+                operator: In
+                values:
+                  - master
+          topologyKey: kubernetes.io/hostname
   containers:
-  - name: electra-container
-    image: electra-sim:v1
-    imagePullPolicy: IfNotPresent
-    command: ["python", "G23_electra_train.py"]
-    env:
-    - name: MASTER_ADDR
-      value: "electra-master-svc"
-    - name: MASTER_PORT
-      value: "29500"
-    - name: WORLD_SIZE
-      value: "2"
-    - name: RANK
-      value: "1"
+    - name: electra-container
+      image: electra-sim:v1
+      imagePullPolicy: IfNotPresent
+      command: ["python", "G23_electra_train.py"]
+      env:
+        - name: MASTER_ADDR
+          value: "electra-master-svc"
+        - name: MASTER_PORT
+          value: "29500"
+        - name: WORLD_SIZE
+          value: "2"
+        - name: RANK
+          value: "1"

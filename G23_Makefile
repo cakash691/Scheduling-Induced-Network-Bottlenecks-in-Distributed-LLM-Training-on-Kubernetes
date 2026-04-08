@@ -4,9 +4,12 @@ IMAGE_NAME   = electra-sim:v1
 CLUSTER_NAME = llm-cluster
 NUM_TRIALS   = 5
 RESULTS_DIR  = results
+DELAY_MS     = 10
+FOLDER       = results
 
 .PHONY: build run-affinity run-antiaffinity run-affinity-trials run-antiaffinity-trials \
-        run-all-trials plot clean setup-results
+        run-all-trials plot plot-folder sweep-summary clean setup-results \
+        netem-apply netem-clear netem-status
 
 # ──────────────────────────────────────────────
 # 0. Create results directory
@@ -25,7 +28,7 @@ build:
 	@echo "══ Build and load complete!"
 
 # ──────────────────────────────────────────────
-# 2. Single-run targets (kept for quick testing)
+# 2. Single-run targets
 # ──────────────────────────────────────────────
 run-affinity: setup-results
 	@echo "══ Starting Affinity Experiment (Same Node)..."
@@ -54,7 +57,7 @@ run-antiaffinity: setup-results
 	@echo "══ Anti-Affinity experiment finished! CSV saved to $(RESULTS_DIR)/G23_results_antiaffinity.csv"
 
 # ──────────────────────────────────────────────
-# 3. Multi-trial targets (5 runs each for stats)
+# 3. Multi-trial targets
 # ──────────────────────────────────────────────
 run-affinity-trials: setup-results
 	@echo "══ Running $(NUM_TRIALS) Affinity trials..."
@@ -86,7 +89,6 @@ run-antiaffinity-trials: setup-results
 	done
 	@echo "══ All $(NUM_TRIALS) Anti-Affinity trials finished!"
 
-# Convenience: run all trials for both configs back-to-back
 run-all-trials: run-affinity-trials run-antiaffinity-trials
 	@echo ""
 	@echo "══════════════════════════════════════════"
@@ -95,15 +97,38 @@ run-all-trials: run-affinity-trials run-antiaffinity-trials
 	@echo "══════════════════════════════════════════"
 
 # ──────────────────────────────────────────────
-# 4. Generate plots from collected CSVs
+# 4. Plotting
 # ──────────────────────────────────────────────
 plot:
 	@echo "══ Generating plots from $(RESULTS_DIR)/..."
-	python G23_plot.py
+	python G23_plot.py $(RESULTS_DIR)
 	@echo "══ Plots saved!"
 
+# Plot a specific folder: make plot-folder FOLDER=results_25ms
+plot-folder:
+	@echo "══ Generating plots from $(FOLDER)/..."
+	python G23_plot.py $(FOLDER)
+	@echo "══ Plots saved!"
+
+# Master comparison across all results_*ms folders
+sweep-summary:
+	@echo "══ Generating sweep summary across all results_* folders..."
+	python G23_sweep_summary.py
+
 # ──────────────────────────────────────────────
-# 5. Emergency cleanup
+# 5. Network latency injection (tc netem)
+# ──────────────────────────────────────────────
+netem-apply:
+	@bash G23_netem_apply.sh $(DELAY_MS)
+
+netem-clear:
+	@bash G23_netem_clear.sh
+
+netem-status:
+	@bash G23_netem_status.sh
+
+# ──────────────────────────────────────────────
+# 6. Emergency cleanup
 # ──────────────────────────────────────────────
 clean:
 	@echo "══ Force cleaning all project pods..."

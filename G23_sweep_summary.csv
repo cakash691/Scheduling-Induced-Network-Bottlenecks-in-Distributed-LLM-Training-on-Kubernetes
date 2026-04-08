@@ -1,0 +1,5 @@
+latency_ms,config,num_trials,mean_sec,std_sec,min_sec,max_sec,slowdown_vs_affinity_pct
+0,affinity,5,15.8501,0.3559,15.3291,16.3886,0.0
+0,antiaffinity,5,15.9108,0.336,15.395,16.3585,0.38
+25,affinity,5,16.7519,0.5854,16.0572,17.7323,0.0
+25,antiaffinity,5,64.7296,0.7221,64.113,66.1439,286.4

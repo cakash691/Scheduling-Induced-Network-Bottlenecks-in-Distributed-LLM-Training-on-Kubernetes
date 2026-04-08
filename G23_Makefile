@@ -8,7 +8,7 @@ DELAY_MS     = 10
 FOLDER       = results
 
 .PHONY: build run-affinity run-antiaffinity run-affinity-trials run-antiaffinity-trials \
-        run-all-trials plot plot-folder sweep sweep-summary sweep-plot clean setup-results \
+        run-all-trials plot plot-folder sweep sweep-summary sweep-plot phase-plot clean setup-results \
         netem-apply netem-clear netem-status
 
 # ──────────────────────────────────────────────
@@ -125,6 +125,11 @@ sweep-plot:
 	@echo "══ Generating sweep line chart from G23_sweep_summary.csv..."
 	python G23_sweep_plot.py
 	@echo "══ Chart saved as G23_sweep_plot.png"
+
+phase-plot:
+	@echo "══ Generating phase breakdown chart from G23_sweep_summary.csv..."
+	python G23_phase_plot.py
+	@echo "══ Chart saved as G23_phase_plot.png"
 
 # ──────────────────────────────────────────────
 # 6. Network latency injection (tc netem)

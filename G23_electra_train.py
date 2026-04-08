@@ -1,5 +1,4 @@
 # G23_electra_train.py
-
 import os
 import csv
 import time
@@ -42,9 +41,21 @@ class DummyDiscriminator(nn.Module):
 
 
 # ──────────────────────────────────────────────
-# 3. Training Loop with Per-Step Instrumentation
+# 3. Training Loop with Phase-Level Instrumentation
 # ──────────────────────────────────────────────
 NUM_STEPS = 50
+
+# CSV schema — keep this in one place so downstream scripts stay in sync
+CSV_FIELDS = [
+    "step",
+    "step_time_sec",       # total wall-clock for this step
+    "forward_time_sec",    # time spent in forward pass
+    "backward_time_sec",   # time spent in backward pass (includes DDP gradient sync)
+    "optimizer_time_sec",  # time spent in optimizer.step()
+    "cumulative_sec",      # total elapsed time from start of training
+    "loss",
+]
+
 
 def train():
     setup()
@@ -53,7 +64,6 @@ def train():
     world_size = int(os.environ["WORLD_SIZE"])
 
     # OUTPUT_CSV can be overridden by the Makefile / YAML env vars.
-    # Default: write to /app/G23_results.csv inside the container.
     output_csv = os.environ.get("OUTPUT_CSV", "/app/G23_results.csv")
 
     print(f"[Pod {rank}] Starting ELECTRA distributed simulation. World Size: {world_size}")
@@ -77,7 +87,7 @@ def train():
     labels = torch.randn(64, 1)
 
     # ── Per-step timing storage ──
-    step_records = []           # list of dicts to write to CSV
+    step_records = []
 
     print(f"[Pod {rank}] Beginning synchronization iterations...")
     total_start = time.time()
@@ -88,32 +98,45 @@ def train():
 
         optimizer.zero_grad()
 
-        # Forward pass
+        # ── PHASE 1: Forward pass ──
+        fwd_start = time.time()
         gen_out  = ddp_generator(data)
         disc_out = ddp_discriminator(gen_out)
-
-        # Loss and backward pass (this is where DDP gradient sync happens!)
         loss = loss_fn(disc_out, labels)
-        loss.backward()
+        fwd_end = time.time()
 
+        # ── PHASE 2: Backward pass (DDP gradient sync happens here!) ──
+        bwd_start = time.time()
+        loss.backward()
+        bwd_end = time.time()
+
+        # ── PHASE 3: Optimizer step ──
+        opt_start = time.time()
         optimizer.step()
+        opt_end = time.time()
 
         step_end = time.time()
 
         # Only rank 0 records metrics (workers don't write CSVs)
         if rank == 0:
-            step_time    = step_end - step_start
-            cumulative   = step_end - total_start
+            step_time   = step_end - step_start
+            fwd_time    = fwd_end - fwd_start
+            bwd_time    = bwd_end - bwd_start
+            opt_time    = opt_end - opt_start
+            cumulative  = step_end - total_start
 
             step_records.append({
-                "step":            step,
-                "step_time_sec":   round(step_time, 6),
-                "cumulative_sec":  round(cumulative, 6),
-                "loss":            round(loss.item(), 6),
+                "step":                step,
+                "step_time_sec":       round(step_time, 6),
+                "forward_time_sec":    round(fwd_time, 6),
+                "backward_time_sec":   round(bwd_time, 6),
+                "optimizer_time_sec":  round(opt_time, 6),
+                "cumulative_sec":      round(cumulative, 6),
+                "loss":                round(loss.item(), 6),
             })
 
             if step % 10 == 0:
-                print(f"  Step {step}/{NUM_STEPS}  |  step_time={step_time:.4f}s  |  cumulative={cumulative:.4f}s")
+                print(f"  Step {step}/{NUM_STEPS}  |  fwd={fwd_time:.4f}s  bwd={bwd_time:.4f}s  opt={opt_time:.4f}s  total={step_time:.4f}s")
 
     total_end = time.time()
 
@@ -121,15 +144,23 @@ def train():
     if rank == 0:
         execution_time = total_end - total_start
 
+        # Aggregate phase totals for the final summary
+        total_fwd = sum(r["forward_time_sec"]   for r in step_records)
+        total_bwd = sum(r["backward_time_sec"]  for r in step_records)
+        total_opt = sum(r["optimizer_time_sec"] for r in step_records)
+
         # Write per-step CSV
         with open(output_csv, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["step", "step_time_sec", "cumulative_sec", "loss"])
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             writer.writeheader()
             writer.writerows(step_records)
 
         print(f"\n========================================")
         print(f"  Simulation Complete!")
         print(f"  Total Execution Time : {execution_time:.2f} seconds")
+        print(f"  ├─ Forward total     : {total_fwd:.2f} seconds ({100*total_fwd/execution_time:.1f}%)")
+        print(f"  ├─ Backward total    : {total_bwd:.2f} seconds ({100*total_bwd/execution_time:.1f}%)  [includes DDP sync]")
+        print(f"  └─ Optimizer total   : {total_opt:.2f} seconds ({100*total_opt/execution_time:.1f}%)")
         print(f"  Per-step CSV saved to: {output_csv}")
         print(f"  Steps recorded       : {len(step_records)}")
         print(f"========================================\n")
@@ -137,9 +168,9 @@ def train():
         # Dump CSV to stdout between markers so Makefile can extract it from logs
         # (kubectl cp doesn't work on completed pods)
         print("===CSV_START===")
-        print("step,step_time_sec,cumulative_sec,loss")
+        print(",".join(CSV_FIELDS))
         for rec in step_records:
-            print(f"{rec['step']},{rec['step_time_sec']},{rec['cumulative_sec']},{rec['loss']}")
+            print(",".join(str(rec[f]) for f in CSV_FIELDS))
         print("===CSV_END===")
 
     cleanup()

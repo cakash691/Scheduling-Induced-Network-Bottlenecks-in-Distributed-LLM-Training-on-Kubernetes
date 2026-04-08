@@ -30,8 +30,9 @@ def load_summary(path="G23_sweep_summary.csv"):
         for row in reader:
             lat = int(row["latency_ms"])
             cfg = row["config"]
-            mean = float(row["mean_sec"])
-            std  = float(row["std_sec"])
+            # Support both old schema (mean_sec/std_sec) and new schema (mean_total_sec/std_total_sec)
+            mean = float(row.get("mean_total_sec") or row.get("mean_sec"))
+            std  = float(row.get("std_total_sec")  or row.get("std_sec"))
             data.setdefault(lat, {})[cfg] = (mean, std)
     return data
 

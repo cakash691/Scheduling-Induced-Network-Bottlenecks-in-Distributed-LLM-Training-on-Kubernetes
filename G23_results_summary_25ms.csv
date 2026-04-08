@@ -1,3 +1,3 @@
 config,num_trials,mean_sec,std_sec,min_sec,max_sec
-affinity,5,16.7519,0.5854,16.0572,17.7323
-antiaffinity,5,64.7296,0.7221,64.113,66.1439
+affinity,5,15.7558,0.2698,15.4742,16.1757
+antiaffinity,5,64.7766,0.4411,64.019,65.2343

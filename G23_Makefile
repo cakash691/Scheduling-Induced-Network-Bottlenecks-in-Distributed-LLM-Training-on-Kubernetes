@@ -1,5 +1,4 @@
 # G23_Makefile
-
 IMAGE_NAME   = electra-sim:v1
 CLUSTER_NAME = llm-cluster
 NUM_TRIALS   = 5
@@ -8,132 +7,52 @@ DELAY_MS     = 10
 FOLDER       = results
 
 .PHONY: build run-affinity run-antiaffinity run-affinity-trials run-antiaffinity-trials \
-        run-all-trials plot plot-folder sweep sweep-summary sweep-plot phase-plot clean setup-results \
-        netem-apply netem-clear netem-status
+        run-all-trials plot plot-folder sweep sweep-w4 sweep-summary sweep-plot phase-plot \
+        clean setup-results netem-apply netem-clear netem-status
 
-# ──────────────────────────────────────────────
-# 0. Create results directory
-# ──────────────────────────────────────────────
 setup-results:
 	@mkdir -p $(RESULTS_DIR)
 
-# ──────────────────────────────────────────────
-# 1. Build Docker image and load into Kind
-# ──────────────────────────────────────────────
 build:
-	@echo "══ Building Docker image..."
 	docker build -f G23_Dockerfile -t $(IMAGE_NAME) .
-	@echo "══ Loading image into kind cluster..."
 	kind load docker-image $(IMAGE_NAME) --name $(CLUSTER_NAME)
-	@echo "══ Build and load complete!"
 
-# ──────────────────────────────────────────────
-# 2. Single-run targets
-# ──────────────────────────────────────────────
+# ── Single-run (2-pod) ──
 run-affinity: setup-results
-	@echo "══ Starting Affinity Experiment (Same Node)..."
 	kubectl apply -f G23_k8s_affinity.yaml
-	@echo "══ Waiting for master pod to complete training..."
 	kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=600s
-	@echo "══ Training complete. Fetching logs..."
 	kubectl logs electra-master
-	@echo "══ Extracting CSV from logs..."
 	kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_affinity.csv
-	@echo "══ Cleaning up pods..."
 	kubectl delete -f G23_k8s_affinity.yaml
-	@echo "══ Affinity experiment finished! CSV saved to $(RESULTS_DIR)/G23_results_affinity.csv"
 
 run-antiaffinity: setup-results
-	@echo "══ Starting Anti-Affinity Experiment (Different Nodes)..."
 	kubectl apply -f G23_k8s_antiaffinity.yaml
-	@echo "══ Waiting for master pod to complete training..."
 	kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=600s
-	@echo "══ Training complete. Fetching logs..."
 	kubectl logs electra-master
-	@echo "══ Extracting CSV from logs..."
 	kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_antiaffinity.csv
-	@echo "══ Cleaning up pods..."
 	kubectl delete -f G23_k8s_antiaffinity.yaml
-	@echo "══ Anti-Affinity experiment finished! CSV saved to $(RESULTS_DIR)/G23_results_antiaffinity.csv"
 
-# ──────────────────────────────────────────────
-# 3. Multi-trial targets
-# ──────────────────────────────────────────────
-run-affinity-trials: setup-results
-	@echo "══ Running $(NUM_TRIALS) Affinity trials..."
-	@for i in $$(seq 1 $(NUM_TRIALS)); do \
-		echo ""; \
-		echo "── Trial $$i/$(NUM_TRIALS) (Affinity) ──"; \
-		kubectl apply -f G23_k8s_affinity.yaml; \
-		kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=600s; \
-		kubectl logs electra-master; \
-		kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_affinity_run$$i.csv; \
-		kubectl delete -f G23_k8s_affinity.yaml; \
-		echo "── Trial $$i complete. CSV → $(RESULTS_DIR)/G23_results_affinity_run$$i.csv"; \
-		sleep 2; \
-	done
-	@echo "══ All $(NUM_TRIALS) Affinity trials finished!"
-
-run-antiaffinity-trials: setup-results
-	@echo "══ Running $(NUM_TRIALS) Anti-Affinity trials..."
-	@for i in $$(seq 1 $(NUM_TRIALS)); do \
-		echo ""; \
-		echo "── Trial $$i/$(NUM_TRIALS) (Anti-Affinity) ──"; \
-		kubectl apply -f G23_k8s_antiaffinity.yaml; \
-		kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/electra-master --timeout=600s; \
-		kubectl logs electra-master; \
-		kubectl logs electra-master | sed -n '/===CSV_START===/,/===CSV_END===/p' | grep -v '===CSV' > $(RESULTS_DIR)/G23_results_antiaffinity_run$$i.csv; \
-		kubectl delete -f G23_k8s_antiaffinity.yaml; \
-		echo "── Trial $$i complete. CSV → $(RESULTS_DIR)/G23_results_antiaffinity_run$$i.csv"; \
-		sleep 2; \
-	done
-	@echo "══ All $(NUM_TRIALS) Anti-Affinity trials finished!"
-
-run-all-trials: run-affinity-trials run-antiaffinity-trials
-	@echo ""
-	@echo "══════════════════════════════════════════"
-	@echo "  All experiments complete!"
-	@echo "  $(NUM_TRIALS) Affinity + $(NUM_TRIALS) Anti-Affinity CSVs in ./$(RESULTS_DIR)/"
-	@echo "══════════════════════════════════════════"
-
-# ──────────────────────────────────────────────
-# 4. Full latency sweep (fully automated)
-# ──────────────────────────────────────────────
-# Runs experiments across all latency values in G23_sweep_run.sh
-# Default: 0, 1, 5, 10, 25 ms (≈ 25 minutes)
+# ── Full sweeps ──
 sweep:
 	@bash G23_sweep_run.sh
 
-# ──────────────────────────────────────────────
-# 5. Plotting
-# ──────────────────────────────────────────────
-plot:
-	@echo "══ Generating plots from $(RESULTS_DIR)/..."
-	python G23_plot.py $(RESULTS_DIR)
-	@echo "══ Plots saved!"
+sweep-w4:
+	@bash G23_sweep_run_w4.sh
 
-plot-folder:
-	@echo "══ Generating plots from $(FOLDER)/..."
-	python G23_plot.py $(FOLDER)
-	@echo "══ Plots saved!"
-
+# ── Analysis ──
 sweep-summary:
-	@echo "══ Generating sweep summary across all results_* folders..."
 	python G23_sweep_summary.py
 
 sweep-plot:
-	@echo "══ Generating sweep line chart from G23_sweep_summary.csv..."
 	python G23_sweep_plot.py
-	@echo "══ Chart saved as G23_sweep_plot.png"
 
 phase-plot:
-	@echo "══ Generating phase breakdown chart from G23_sweep_summary.csv..."
 	python G23_phase_plot.py
-	@echo "══ Chart saved as G23_phase_plot.png"
 
-# ──────────────────────────────────────────────
-# 6. Network latency injection (tc netem)
-# ──────────────────────────────────────────────
+plot-folder:
+	python G23_plot.py $(FOLDER)
+
+# ── Network latency (tc netem) ──
 netem-apply:
 	@bash G23_netem_apply.sh $(DELAY_MS)
 
@@ -143,11 +62,9 @@ netem-clear:
 netem-status:
 	@bash G23_netem_status.sh
 
-# ──────────────────────────────────────────────
-# 7. Emergency cleanup
-# ──────────────────────────────────────────────
+# ── Cleanup ──
 clean:
-	@echo "══ Force cleaning all project pods..."
 	kubectl delete -f G23_k8s_affinity.yaml --ignore-not-found
 	kubectl delete -f G23_k8s_antiaffinity.yaml --ignore-not-found
-	@echo "══ Clean complete."
+	kubectl delete -f G23_k8s_affinity_w4.yaml --ignore-not-found
+	kubectl delete -f G23_k8s_antiaffinity_w4.yaml --ignore-not-found

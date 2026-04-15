@@ -1,0 +1,108 @@
+# G23_k8s_affinity_w4.yaml
+# 4-pod DDP configuration: 1 master + 3 workers, all forced onto the SAME node
+apiVersion: v1
+kind: Service
+metadata:
+  name: electra-master-svc
+spec:
+  selector:
+    role: master
+  ports:
+    - port: 29500
+      targetPort: 29500
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: electra-master
+  labels:
+    role: master
+    group: electra-ddp
+spec:
+  restartPolicy: Never
+  containers:
+  - name: electra-container
+    image: electra-sim:v1
+    imagePullPolicy: IfNotPresent
+    command: ["python", "G23_electra_train.py"]
+    env:
+    - { name: MASTER_ADDR, value: "electra-master-svc" }
+    - { name: MASTER_PORT, value: "29500" }
+    - { name: WORLD_SIZE,  value: "4" }
+    - { name: RANK,        value: "0" }
+    - { name: OUTPUT_CSV,  value: "/app/G23_results.csv" }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: electra-worker-1
+  labels: { role: worker, group: electra-ddp }
+spec:
+  restartPolicy: Never
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - { key: group, operator: In, values: [electra-ddp] }
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: electra-container
+    image: electra-sim:v1
+    imagePullPolicy: IfNotPresent
+    command: ["python", "G23_electra_train.py"]
+    env:
+    - { name: MASTER_ADDR, value: "electra-master-svc" }
+    - { name: MASTER_PORT, value: "29500" }
+    - { name: WORLD_SIZE,  value: "4" }
+    - { name: RANK,        value: "1" }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: electra-worker-2
+  labels: { role: worker, group: electra-ddp }
+spec:
+  restartPolicy: Never
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - { key: group, operator: In, values: [electra-ddp] }
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: electra-container
+    image: electra-sim:v1
+    imagePullPolicy: IfNotPresent
+    command: ["python", "G23_electra_train.py"]
+    env:
+    - { name: MASTER_ADDR, value: "electra-master-svc" }
+    - { name: MASTER_PORT, value: "29500" }
+    - { name: WORLD_SIZE,  value: "4" }
+    - { name: RANK,        value: "2" }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: electra-worker-3
+  labels: { role: worker, group: electra-ddp }
+spec:
+  restartPolicy: Never
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - { key: group, operator: In, values: [electra-ddp] }
+        topologyKey: kubernetes.io/hostname
+  containers:
+  - name: electra-container
+    image: electra-sim:v1
+    imagePullPolicy: IfNotPresent
+    command: ["python", "G23_electra_train.py"]
+    env:
+    - { name: MASTER_ADDR, value: "electra-master-svc" }
+    - { name: MASTER_PORT, value: "29500" }
+    - { name: WORLD_SIZE,  value: "4" }
+    - { name: RANK,        value: "3" }

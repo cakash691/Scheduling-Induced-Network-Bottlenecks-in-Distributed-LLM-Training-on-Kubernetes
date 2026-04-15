@@ -1,16 +1,5 @@
 # G23_sweep_plot.py
-#
-# Reads G23_sweep_summary.csv and generates a publication-quality line chart
-# showing how execution time scales with injected network latency, for both
-# affinity and anti-affinity configurations.
-#
-# Produces:
-#   - G23_sweep_plot.png : main line chart with error bars
-#
-# Usage: python G23_sweep_plot.py
-
-import csv
-import sys
+import csv, sys
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
@@ -18,22 +7,26 @@ import matplotlib
 matplotlib.rcParams['font.family'] = 'serif'
 matplotlib.rcParams['font.serif']  = ['Times New Roman']
 
-COLOR_AFFINITY     = '#4CAF50'
-COLOR_ANTIAFFINITY = '#F44336'
+# Color/marker scheme: green=affinity, red=anti-affinity. Solid=2-pod, dashed=4-pod
+STYLES = {
+    (2, "affinity"):     {"color": "#4CAF50", "marker": "o", "linestyle": "-",  "label": "Affinity, 2 pods"},
+    (2, "antiaffinity"): {"color": "#F44336", "marker": "s", "linestyle": "-",  "label": "Anti-Affinity, 2 pods"},
+    (4, "affinity"):     {"color": "#2E7D32", "marker": "o", "linestyle": "--", "label": "Affinity, 4 pods"},
+    (4, "antiaffinity"): {"color": "#B71C1C", "marker": "s", "linestyle": "--", "label": "Anti-Affinity, 4 pods"},
+}
 
 
 def load_summary(path="G23_sweep_summary.csv"):
-    """Returns dict: {latency_ms: {affinity: (mean, std), antiaffinity: (mean, std)}}"""
+    """Returns dict: {(world_size, config): {latency: (mean, std)}}"""
     data = {}
     with open(path, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            lat = int(row["latency_ms"])
+        for row in csv.DictReader(f):
+            ws = int(row.get("world_size", 2))
             cfg = row["config"]
-            # Support both old schema (mean_sec/std_sec) and new schema (mean_total_sec/std_total_sec)
+            lat = int(row["latency_ms"])
             mean = float(row.get("mean_total_sec") or row.get("mean_sec"))
             std  = float(row.get("std_total_sec")  or row.get("std_sec"))
-            data.setdefault(lat, {})[cfg] = (mean, std)
+            data.setdefault((ws, cfg), {})[lat] = (mean, std)
     return data
 
 
@@ -41,73 +34,61 @@ def main():
     try:
         data = load_summary()
     except FileNotFoundError:
-        print("ERROR: G23_sweep_summary.csv not found.")
-        print("Run: make -f G23_Makefile sweep-summary")
+        print("ERROR: G23_sweep_summary.csv not found. Run sweep-summary first.")
         sys.exit(1)
 
-    latencies = sorted(data.keys())
+    fig, ax = plt.subplots(figsize=(11, 6.5))
 
-    aff_means  = [data[l]["affinity"][0]     for l in latencies]
-    aff_stds   = [data[l]["affinity"][1]     for l in latencies]
-    anti_means = [data[l]["antiaffinity"][0] for l in latencies]
-    anti_stds  = [data[l]["antiaffinity"][1] for l in latencies]
+    all_means = []
+    all_stds  = []
 
-    # ── Main figure ──
-    fig, ax = plt.subplots(figsize=(10, 6))
+    for key, points in sorted(data.items()):
+        if not points: continue
+        style = STYLES.get(key, {"color": "gray", "marker": "x", "linestyle": "-", "label": str(key)})
+        latencies = sorted(points.keys())
+        means = [points[l][0] for l in latencies]
+        stds  = [points[l][1] for l in latencies]
+        all_means.extend(means)
+        all_stds.extend(stds)
 
-    # Affinity line
-    ax.errorbar(latencies, aff_means, yerr=aff_stds,
-                color=COLOR_AFFINITY, linewidth=2.5, marker='o', markersize=9,
-                markerfacecolor=COLOR_AFFINITY, markeredgecolor='#2E7D32',
-                capsize=6, capthick=1.5,
-                label='Affinity (Same Node)')
+        ax.errorbar(latencies, means, yerr=stds,
+                    color=style["color"], linewidth=2.2, marker=style["marker"], markersize=8,
+                    linestyle=style["linestyle"], capsize=5, capthick=1.2,
+                    label=style["label"])
 
-    # Anti-Affinity line
-    ax.errorbar(latencies, anti_means, yerr=anti_stds,
-                color=COLOR_ANTIAFFINITY, linewidth=2.5, marker='s', markersize=9,
-                markerfacecolor=COLOR_ANTIAFFINITY, markeredgecolor='#B71C1C',
-                capsize=6, capthick=1.5,
-                label='Anti-Affinity (Different Nodes)')
-
-    # Value annotations above anti-affinity points
-    for x, y in zip(latencies, anti_means):
-        ax.annotate(f"{y:.1f}s", xy=(x, y), xytext=(0, 10),
-                    textcoords='offset points', ha='center', fontsize=10,
-                    color='#B71C1C', fontweight='bold')
-
-    # Value annotations below affinity points
-    for x, y in zip(latencies, aff_means):
-        ax.annotate(f"{y:.1f}s", xy=(x, y), xytext=(0, -16),
-                    textcoords='offset points', ha='center', fontsize=10,
-                    color='#2E7D32', fontweight='bold')
+        # Annotate the rightmost (highest-latency) point of each line
+        if means:
+            ax.annotate(f"{means[-1]:.1f}s", xy=(latencies[-1], means[-1]),
+                        xytext=(8, 0), textcoords='offset points',
+                        fontsize=9, fontweight='bold', color=style["color"], va='center')
 
     ax.set_xlabel('Injected Network Latency (ms)', fontweight='bold', fontsize=13)
     ax.set_ylabel('Execution Time (Seconds)', fontweight='bold', fontsize=13)
-    ax.set_title('G23: Distributed ELECTRA Training Time vs. Injected Network Latency\n'
-                 '(5 trials per condition, error bars show ±1σ)',
-                 fontweight='bold', fontsize=13)
 
-    ax.legend(loc='upper left', fontsize=12, framealpha=0.95)
+    has_w4 = any(ws == 4 for (ws, _) in data.keys())
+    title = 'G23: Distributed ELECTRA Training Time vs. Injected Network Latency'
+    if has_w4:
+        title += '\n2-pod vs 4-pod DDP comparison (5 trials per condition, error bars = ±1σ)'
+    else:
+        title += '\n(5 trials per condition, error bars = ±1σ)'
+    ax.set_title(title, fontweight='bold', fontsize=12)
+
+    ax.legend(loc='upper left', fontsize=10, framealpha=0.95)
     ax.grid(True, linestyle='--', alpha=0.5)
     ax.set_axisbelow(True)
-    ax.set_xticks(latencies)
 
-    # Small buffer on the y-axis
-    ymax = max(anti_means) + max(anti_stds) + 8
-    ax.set_ylim(0, ymax)
+    # X-axis: union of all latencies seen
+    all_lats = sorted({l for points in data.values() for l in points.keys()})
+    ax.set_xticks(all_lats)
+
+    if all_means:
+        ymax = max(all_means) + max(all_stds) + 12
+        ax.set_ylim(0, ymax)
 
     fig.tight_layout()
     fig.savefig("G23_sweep_plot.png", dpi=300, bbox_inches='tight')
     print("✓ Saved: G23_sweep_plot.png")
     plt.close(fig)
-
-    # ── Print summary ──
-    print(f"\n{'Latency':>10} | {'Affinity':>15} | {'Anti-Affinity':>16} | {'Slowdown':>10}")
-    print("─" * 62)
-    for l, a, aa in zip(latencies, aff_means, anti_means):
-        slowdown = ((aa - a) / a) * 100 if a > 0 else 0.0
-        print(f"{l:>7} ms | {a:>13.2f} s | {aa:>14.2f} s | {slowdown:>+9.1f}%")
-    print()
 
 
 if __name__ == "__main__":

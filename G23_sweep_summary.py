@@ -1,61 +1,38 @@
 # G23_sweep_summary.py
-#
-# Scans all "results_*" folders in the current directory and compiles
-# a single master CSV comparing all latency conditions side by side.
-#
-# Produces: G23_sweep_summary.csv with per-phase aggregated statistics.
-#
-# Columns:
-#   latency_ms, config, num_trials,
-#   mean_total_sec, std_total_sec,
-#   mean_forward_sec, mean_backward_sec, mean_optimizer_sec,
-#   backward_pct, slowdown_vs_affinity_pct
-#
-# Usage: python G23_sweep_summary.py
-
-import os
-import re
-import csv
-import glob
+import os, re, csv, glob
 import numpy as np
 
 
 def read_trial_csv(filepath):
-    """
-    Returns dict with total_sec, forward_sum, backward_sum, optimizer_sum.
-    Returns None if file is empty/malformed.
-    """
-    fwd_total = 0.0
-    bwd_total = 0.0
-    opt_total = 0.0
-    last_cum  = 0.0
-    row_count = 0
-
+    fwd = bwd = opt = last_cum = 0.0
+    rx = tx = 0
+    cpu_vals = []
+    rows_seen = 0
     with open(filepath, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
+        for row in csv.DictReader(f):
             try:
-                last_cum  = float(row["cumulative_sec"])
-                fwd_total += float(row.get("forward_time_sec", 0) or 0)
-                bwd_total += float(row.get("backward_time_sec", 0) or 0)
-                opt_total += float(row.get("optimizer_time_sec", 0) or 0)
-                row_count += 1
+                last_cum = float(row["cumulative_sec"])
+                fwd += float(row.get("forward_time_sec", 0) or 0)
+                bwd += float(row.get("backward_time_sec", 0) or 0)
+                opt += float(row.get("optimizer_time_sec", 0) or 0)
+                rx  += int(row.get("net_rx_bytes", 0) or 0)
+                tx  += int(row.get("net_tx_bytes", 0) or 0)
+                if row.get("cpu_pct"):
+                    cpu_vals.append(float(row["cpu_pct"]))
+                rows_seen += 1
             except (ValueError, KeyError):
                 continue
-
-    if row_count == 0:
+    if rows_seen == 0:
         return None
-
     return {
-        "total_sec":     last_cum,
-        "forward_sec":   fwd_total,
-        "backward_sec":  bwd_total,
-        "optimizer_sec": opt_total,
+        "total_sec": last_cum, "forward_sec": fwd,
+        "backward_sec": bwd, "optimizer_sec": opt,
+        "net_rx_mb": rx / 1024 / 1024, "net_tx_mb": tx / 1024 / 1024,
+        "avg_cpu_pct": sum(cpu_vals) / len(cpu_vals) if cpu_vals else 0.0,
     }
 
 
 def load_folder(folder):
-    """Return (affinity_trials, antiaffinity_trials) lists of trial dicts."""
     aff, anti = [], []
     for f in sorted(glob.glob(os.path.join(folder, "G23_results_affinity_run*.csv"))):
         t = read_trial_csv(f)
@@ -66,120 +43,99 @@ def load_folder(folder):
     return aff, anti
 
 
-def extract_latency(folder_name):
-    """Pull the latency number out of a folder name like 'results_25ms' → 25."""
+def parse_folder(folder_name):
+    """Returns (world_size, latency_ms) from folder name. Defaults world_size=2 for legacy folders."""
     base = os.path.basename(folder_name.rstrip("/"))
-    if base == "results":
-        return 0
-    m = re.search(r"results_(\d+)ms", base)
-    if m:
-        return int(m.group(1))
-    return None
+    # results_w4_25ms → (4, 25), results_25ms → (2, 25), results → (2, 0)
+    m = re.match(r"results(?:_w(\d+))?(?:_(\d+)ms)?$", base)
+    if not m:
+        return None
+    world_size = int(m.group(1)) if m.group(1) else 2
+    latency    = int(m.group(2)) if m.group(2) else 0
+    return world_size, latency
 
 
 def aggregate(trials):
-    """Compute mean/std across trials for each metric."""
-    if not trials:
-        return None
-    totals  = np.array([t["total_sec"]     for t in trials])
-    fwds    = np.array([t["forward_sec"]   for t in trials])
-    bwds    = np.array([t["backward_sec"]  for t in trials])
-    opts    = np.array([t["optimizer_sec"] for t in trials])
+    if not trials: return None
+    totals = np.array([t["total_sec"] for t in trials])
     return {
-        "num_trials":        len(trials),
-        "mean_total_sec":    float(totals.mean()),
-        "std_total_sec":     float(totals.std()),
-        "mean_forward_sec":  float(fwds.mean()),
-        "mean_backward_sec": float(bwds.mean()),
-        "mean_optimizer_sec": float(opts.mean()),
+        "num_trials": len(trials),
+        "mean_total_sec":     float(totals.mean()),
+        "std_total_sec":      float(totals.std()),
+        "mean_forward_sec":   float(np.mean([t["forward_sec"]   for t in trials])),
+        "mean_backward_sec":  float(np.mean([t["backward_sec"]  for t in trials])),
+        "mean_optimizer_sec": float(np.mean([t["optimizer_sec"] for t in trials])),
+        "mean_net_tx_mb":     float(np.mean([t["net_tx_mb"]     for t in trials])),
+        "mean_net_rx_mb":     float(np.mean([t["net_rx_mb"]     for t in trials])),
+        "mean_cpu_pct":       float(np.mean([t["avg_cpu_pct"]   for t in trials])),
     }
 
 
 def main():
-    folders = sorted(glob.glob("results_*ms")) + (["results"] if os.path.isdir("results") else [])
-
-    seen = set()
+    all_folders = sorted(glob.glob("results*"))
     entries = []
-    for folder in folders:
-        latency = extract_latency(folder)
-        if latency is None or folder in seen:
+    seen = set()
+    for folder in all_folders:
+        if not os.path.isdir(folder) or folder in seen:
+            continue
+        parsed = parse_folder(folder)
+        if parsed is None:
             continue
         seen.add(folder)
-        entries.append((latency, folder))
+        ws, lat = parsed
+        entries.append((ws, lat, folder))
     entries.sort()
 
     if not entries:
-        print("No results_*ms or results/ folders found. Run experiments first.")
+        print("No results folders found.")
         return
 
     rows = []
-    for latency, folder in entries:
+    for ws, lat, folder in entries:
         aff, anti = load_folder(folder)
         if not aff or not anti:
             print(f"  Skipping {folder} (incomplete data)")
             continue
 
-        aff_stats  = aggregate(aff)
-        anti_stats = aggregate(anti)
+        a, b = aggregate(aff), aggregate(anti)
+        slowdown = ((b["mean_total_sec"] - a["mean_total_sec"]) / a["mean_total_sec"]) * 100 if a["mean_total_sec"] > 0 else 0.0
 
-        aff_mean  = aff_stats["mean_total_sec"]
-        anti_mean = anti_stats["mean_total_sec"]
-        slowdown  = ((anti_mean - aff_mean) / aff_mean) * 100 if aff_mean > 0 else 0.0
+        for cfg, stats, sd in [("affinity", a, 0.0), ("antiaffinity", b, slowdown)]:
+            bp = (stats["mean_backward_sec"] / stats["mean_total_sec"] * 100) if stats["mean_total_sec"] > 0 else 0.0
+            rows.append({
+                "world_size": ws, "latency_ms": lat, "config": cfg,
+                "num_trials":         stats["num_trials"],
+                "mean_total_sec":     round(stats["mean_total_sec"], 4),
+                "std_total_sec":      round(stats["std_total_sec"], 4),
+                "mean_forward_sec":   round(stats["mean_forward_sec"], 4),
+                "mean_backward_sec":  round(stats["mean_backward_sec"], 4),
+                "mean_optimizer_sec": round(stats["mean_optimizer_sec"], 4),
+                "mean_net_tx_mb":     round(stats["mean_net_tx_mb"], 4),
+                "mean_net_rx_mb":     round(stats["mean_net_rx_mb"], 4),
+                "mean_cpu_pct":       round(stats["mean_cpu_pct"], 2),
+                "backward_pct":       round(bp, 2),
+                "slowdown_vs_affinity_pct": round(sd, 2),
+            })
 
-        def bwd_pct(stats):
-            return (stats["mean_backward_sec"] / stats["mean_total_sec"] * 100) if stats["mean_total_sec"] > 0 else 0.0
+    fieldnames = ["world_size", "latency_ms", "config", "num_trials",
+                  "mean_total_sec", "std_total_sec",
+                  "mean_forward_sec", "mean_backward_sec", "mean_optimizer_sec",
+                  "mean_net_tx_mb", "mean_net_rx_mb", "mean_cpu_pct",
+                  "backward_pct", "slowdown_vs_affinity_pct"]
+    with open("G23_sweep_summary.csv", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
 
-        rows.append({
-            "latency_ms": latency,
-            "config": "affinity",
-            "num_trials":         aff_stats["num_trials"],
-            "mean_total_sec":     round(aff_stats["mean_total_sec"], 4),
-            "std_total_sec":      round(aff_stats["std_total_sec"], 4),
-            "mean_forward_sec":   round(aff_stats["mean_forward_sec"], 4),
-            "mean_backward_sec":  round(aff_stats["mean_backward_sec"], 4),
-            "mean_optimizer_sec": round(aff_stats["mean_optimizer_sec"], 4),
-            "backward_pct":       round(bwd_pct(aff_stats), 2),
-            "slowdown_vs_affinity_pct": 0.0,
-        })
-        rows.append({
-            "latency_ms": latency,
-            "config": "antiaffinity",
-            "num_trials":         anti_stats["num_trials"],
-            "mean_total_sec":     round(anti_stats["mean_total_sec"], 4),
-            "std_total_sec":      round(anti_stats["std_total_sec"], 4),
-            "mean_forward_sec":   round(anti_stats["mean_forward_sec"], 4),
-            "mean_backward_sec":  round(anti_stats["mean_backward_sec"], 4),
-            "mean_optimizer_sec": round(anti_stats["mean_optimizer_sec"], 4),
-            "backward_pct":       round(bwd_pct(anti_stats), 2),
-            "slowdown_vs_affinity_pct": round(slowdown, 2),
-        })
-
-    # Write master CSV
-    outpath = "G23_sweep_summary.csv"
-    fieldnames = [
-        "latency_ms", "config", "num_trials",
-        "mean_total_sec", "std_total_sec",
-        "mean_forward_sec", "mean_backward_sec", "mean_optimizer_sec",
-        "backward_pct", "slowdown_vs_affinity_pct",
-    ]
-    with open(outpath, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-    # Pretty-print table
-    print(f"\n✓ Saved: {outpath}\n")
-    print(f"{'Latency':>9} | {'Config':<14} | {'Total':>9} | {'Forward':>9} | {'Backward':>10} | {'Bwd %':>7} | {'Slowdown':>10}")
-    print("─" * 88)
+    print(f"\n✓ Saved: G23_sweep_summary.csv\n")
+    print(f"{'WS':>3} | {'Lat':>5} | {'Config':<14} | {'Total':>8} | {'Backward':>9} | {'Bwd%':>6} | {'TX MB':>7} | {'CPU%':>6} | {'Slowdown':>10}")
+    print("─" * 96)
     for r in rows:
-        latency_str  = f"{r['latency_ms']}ms"
-        slowdown_str = f"{r['slowdown_vs_affinity_pct']:+.1f}%" if r['config'] == "antiaffinity" else "—"
-        print(f"{latency_str:>9} | {r['config']:<14} | "
-              f"{r['mean_total_sec']:>7.2f}s | "
-              f"{r['mean_forward_sec']:>7.2f}s | "
-              f"{r['mean_backward_sec']:>8.2f}s | "
-              f"{r['backward_pct']:>6.1f}% | "
-              f"{slowdown_str:>10}")
+        sd = f"{r['slowdown_vs_affinity_pct']:+.1f}%" if r['config'] == "antiaffinity" else "—"
+        print(f"{r['world_size']:>3} | {r['latency_ms']:>3}ms | {r['config']:<14} | "
+              f"{r['mean_total_sec']:>6.2f}s | {r['mean_backward_sec']:>7.2f}s | "
+              f"{r['backward_pct']:>5.1f}% | {r['mean_net_tx_mb']:>6.2f} | "
+              f"{r['mean_cpu_pct']:>5.1f}% | {sd:>10}")
     print()
 
 

@@ -1,5 +1,6 @@
 #!/bin/bash
 # G23_netem_apply.sh
+
 set -e
 DELAY_MS=${1:-10}
 INTERFACE="eth0"

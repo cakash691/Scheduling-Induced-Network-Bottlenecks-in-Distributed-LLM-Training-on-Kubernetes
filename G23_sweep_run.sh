@@ -1,6 +1,6 @@
 #!/bin/bash
 # G23_sweep_run.sh
-#
+
 # Runs the complete latency sweep:
 #   For each latency value in LATENCIES:
 #     1. Apply tc netem delay to worker nodes

@@ -1,2 +1,28 @@
+# macOS
 .DS_Store
 **/.DS_Store
+
+# Experiment results (regenerable via sweep)
+results/
+results_*ms/
+results_w4_*ms/
+
+# Generated plots and summaries (regenerable via plot scripts)
+G23_sweep_summary.csv
+G23_results_summary*.csv
+G23_sweep_plot.png
+G23_phase_plot.png
+G23_plot_bar*.png
+G23_plot_perstep*.png
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.log

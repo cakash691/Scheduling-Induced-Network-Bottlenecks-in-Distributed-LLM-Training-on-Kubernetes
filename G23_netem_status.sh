@@ -1,5 +1,6 @@
 #!/bin/bash
 # G23_netem_status.sh
+
 INTERFACE="eth0"
 WORKERS=$(docker ps --format '{{.Names}}' | grep '^llm-cluster-worker' | sort)
 
